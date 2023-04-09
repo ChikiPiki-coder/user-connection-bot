@@ -1,0 +1,16 @@
+applications:
+  telegram:
+    token: ${TELEGRAM_BOT_TOKEN:6114311947:AAHoPCfjTFXvkuZe-P8QMRxX3FcHrnAzJ9w}
+    botName: ${BOT_NAME:FollowChangesBot}
+
+spring:
+  datasource:
+    url: ${JDBC_HOST:jdbc:postgresql://localhost:5432/postgres}
+    username: postgres
+    password: postgres
+  jpa:
+    hibernate.ddl-auto: update
+    generate-ddl: true
+
+server:
+  port: 8084
