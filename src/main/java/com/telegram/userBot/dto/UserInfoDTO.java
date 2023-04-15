@@ -8,4 +8,5 @@ public class UserInfoDTO {
     private String userName;
 
     private Long chatId;
+    private Long userId;
 }

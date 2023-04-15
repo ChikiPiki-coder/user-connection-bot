@@ -9,4 +9,6 @@ import com.telegram.userBot.entity.UserInfoEntity;
 
 @Repository
 public interface UserInfoRepository  extends JpaRepository<UserInfoEntity, UUID> {
+    UserInfoEntity findByUserId(Long userId);
+    UserInfoEntity findByUserIdAndChatId(Long userId, Long chatId);
 }

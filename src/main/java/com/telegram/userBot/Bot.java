@@ -1,18 +1,28 @@
 package com.telegram.userBot;
 
+import static com.telegram.userBot.BotState.SET_ARTICLE;
+import static com.telegram.userBot.constant.MessageConstant.ADD_PRODUCT;
 import static com.telegram.userBot.constant.MessageConstant.DEFAULT_MESSAGE;
 import static com.telegram.userBot.constant.MessageConstant.END_ASK;
+import static com.telegram.userBot.constant.MessageConstant.END_RULE_INFO_BAD;
+import static com.telegram.userBot.constant.MessageConstant.END_RULE_INFO_GOOD;
 import static com.telegram.userBot.constant.MessageConstant.ENTER_CHAT_ID;
 import static com.telegram.userBot.constant.MessageConstant.ERROR_CHAT_ID_FORMAT;
+import static com.telegram.userBot.constant.MessageConstant.ERROR_NOT_USER_INFO;
+import static com.telegram.userBot.constant.MessageConstant.ERROR_PID_FORMAT;
+import static com.telegram.userBot.constant.MessageConstant.ERROR_RULE_FORMAT;
 import static com.telegram.userBot.constant.MessageConstant.HELP_MESSAGE;
 import static com.telegram.userBot.constant.MessageConstant.SET_NAME;
+import static com.telegram.userBot.constant.MessageConstant.SET_RULE_VALUE;
 import static com.telegram.userBot.constant.MessageConstant.START_MESSAGE;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
@@ -24,36 +34,49 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
+import com.telegram.userBot.client.LamodaClient;
+import com.telegram.userBot.client.ScraperClient;
 import com.telegram.userBot.config.property.TelegramProperty;
+import com.telegram.userBot.dto.TargetDTO;
+import com.telegram.userBot.dto.TargetRequest;
 import com.telegram.userBot.dto.UserInfoDTO;
+import com.telegram.userBot.entity.TargetEntity;
 import com.telegram.userBot.entity.UserInfoEntity;
-import com.telegram.userBot.mapper.RuleInfoMapper;
+import com.telegram.userBot.mapper.TargetMapper;
 import com.telegram.userBot.mapper.UserInfoMapper;
-import com.telegram.userBot.repository.RuleInfoRepository;
+import com.telegram.userBot.repository.TargetRepository;
 import com.telegram.userBot.repository.UserInfoRepository;
 
+import feign.FeignException;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @Component
 public class Bot extends TelegramLongPollingBot {
     private final TelegramProperty config;
     private final UserInfoRepository userInfoRepository;
-    private final RuleInfoRepository ruleInfoRepository;
-
+    private final TargetRepository targetRepository;
     private final UserInfoMapper userInfoMapper;
+    private final TargetMapper targetMapper;
+    private final LamodaClient lamodaClient;
+    private final ScraperClient scraperClient;
 
-    private final RuleInfoMapper ruleInfoMapper;
 
     private Map<Long, BotState> cacheBotState = new HashMap<>();
 
     public Bot(TelegramProperty config,
                UserInfoRepository userInfoRepository,
-               RuleInfoRepository ruleInfoRepository,
-               RuleInfoMapper ruleInfoMapper,
-               UserInfoMapper userInfoMapper) {
+               TargetRepository targetRepository,
+               UserInfoMapper userInfoMapper,
+               LamodaClient lamodaClient,
+               ScraperClient scraperClient,
+               TargetMapper targetMapper) {
         this.userInfoRepository = userInfoRepository;
-        this.ruleInfoRepository = ruleInfoRepository;
-        this.ruleInfoMapper = ruleInfoMapper;
+        this.targetRepository = targetRepository;
         this.userInfoMapper = userInfoMapper;
-
+        this.lamodaClient = lamodaClient;
+        this.scraperClient = scraperClient;
+        this.targetMapper = targetMapper;
         this.config = config;
 
         List<BotCommand> botCommandList = new ArrayList<>();
@@ -61,6 +84,7 @@ public class Bot extends TelegramLongPollingBot {
         botCommandList.add(new BotCommand("/help", "Инструкция как пользоваться"));
         botCommandList.add(new BotCommand("/addproduct", "Добавить новый товар для отслеживания"));
         botCommandList.add(new BotCommand("/deleteproduct", "Удалить товар из списка отслеживаемых"));
+        botCommandList.add(new BotCommand("/getall", "Получить список всех зарегистрированных заявок"));
         botCommandList.add(new BotCommand("/stoptrack", "Остановить отслеживаемый товар"));
         botCommandList.add(new BotCommand("/startrack", "Остановить отслеживаемый товар"));
         botCommandList.add(new BotCommand("/changeprice", "Поменять цену"));
@@ -91,10 +115,17 @@ public class Bot extends TelegramLongPollingBot {
                     processingSetNameState(chatId, messageText);
                     break;
                 case SET_RULE:
+                    processingSetRuleState(chatId, messageText);
+                    break;
                 case SET_ARTICLE:
+                    processingSetArticleState(chatId, messageText);
+                    break;
                 case SET_CHAT_ID:
                 case END_ASK_USER_INFO:
                     processingEndAskUserInfoState(chatId, messageText);
+                    break;
+                default:
+                    processingDefaultState(chatId, messageText);
                     break;
             }
 
@@ -115,6 +146,120 @@ public class Bot extends TelegramLongPollingBot {
 
         }
 
+    }
+
+    private void processingSetRuleState(long chatId, String messageText) {
+        if (validateRuleAndChatId(messageText)) {
+            String[] words = messageText.split(",");
+            TargetEntity targetEntity = targetMapper.updateEntity(
+                    targetRepository.findByUserId(
+                            userInfoRepository.findByUserIdAndChatId(chatId, Long.parseLong(words[1])).getUuid()),
+                    "ACTIVE",
+                    Long.parseLong(words[0])
+            );
+
+            targetRepository.save(targetEntity);
+
+            TargetRequest targetRequest = new TargetRequest();
+            targetRequest.setTargetUUID(targetEntity.getUuid());
+            targetRequest.setProductId(targetEntity.getProductId());
+            targetRequest.setUserId(targetEntity.getUserId().toString());
+
+            SendMessage message = new SendMessage();
+            message.setChatId(chatId);
+            try {
+                if (scraperClient.addProduct(targetRequest).getStatusCode().is2xxSuccessful()) {
+                    message.setText(END_RULE_INFO_GOOD);
+                    cacheBotState.put(chatId, BotState.DEFAULT);
+                } else {
+                    message.setText(END_RULE_INFO_BAD);
+                }
+            } catch (Exception e) {
+                log.error(e.getMessage());
+                message.setText(END_RULE_INFO_BAD);
+            }
+
+            executeMessage(message);
+        } else {
+            errorFormatRuleMessage(chatId);
+        }
+    }
+
+    private void errorFormatRuleMessage(long chatId) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(ERROR_RULE_FORMAT);
+        executeMessage(message);
+    }
+
+    private boolean validateRuleAndChatId(String messageText) {
+        String[] words = messageText.split(",");
+        if (words.length != 2) {
+            return false;
+        }
+
+        try {
+            Long.parseLong(words[0]);
+        } catch (NumberFormatException e) {
+            return false;
+        }
+        try {
+            Long.parseLong(words[1]);
+        } catch (NumberFormatException e) {
+            return false;
+        }
+        return true;
+    }
+
+    private void processingSetArticleState(long chatId, String messageText) {
+        if (validatePid(messageText)) {
+            TargetDTO targetDTO = new TargetDTO();
+            targetDTO.setProductId(messageText);
+            UserInfoEntity userEntity = userInfoRepository.findByUserId(chatId);
+            if (userEntity == null) {
+                errorNotUserInfo(chatId);
+                return;
+            }
+            targetDTO.setUserId(userEntity.getUuid());
+            TargetEntity ruleInfoEntity = targetMapper.toNewEntity(targetDTO);
+            targetRepository.save(ruleInfoEntity);
+
+            SendMessage message = new SendMessage();
+            message.setChatId(chatId);
+            message.setText(SET_RULE_VALUE);
+
+            cacheBotState.put(chatId, BotState.SET_RULE);
+
+            executeMessage(message);
+        } else {
+            errorFormatPIDMessage(chatId);
+        }
+    }
+
+    private void errorNotUserInfo(long chatId) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(ERROR_NOT_USER_INFO);
+        cacheBotState.put(chatId, BotState.SET_NAME);
+        executeMessage(message);
+    }
+
+    private void errorFormatPIDMessage(long chatId) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(ERROR_PID_FORMAT);
+        executeMessage(message);
+    }
+
+    private boolean validatePid(String messageText) {
+        ResponseEntity<Void> productData;
+        try {
+            productData = lamodaClient.getProductData(messageText);
+        } catch (FeignException.FeignClientException e) {
+            log.error(e.getMessage());
+            return false;
+        }
+        return productData.getStatusCode().value() == 200;
     }
 
 
@@ -180,10 +325,7 @@ public class Bot extends TelegramLongPollingBot {
     }
 
     private void processingEndAskUserInfoState(long chatId, String messageText) {
-        UserInfoDTO userDTO = new UserInfoDTO();
-        userDTO.setUserName(messageText);
-
-        UserInfoEntity userInfoEntity = userInfoMapper.toNewEntity(userDTO);
+        UserInfoEntity userInfoEntity = userInfoMapper.updateEntity(userInfoRepository.findByUserId(chatId), messageText);
         userInfoRepository.save(userInfoEntity);
 
         SendMessage message = new SendMessage();
@@ -201,9 +343,12 @@ public class Bot extends TelegramLongPollingBot {
             case "/help":
                 helpMessage(chatId);
                 break;
-//                case "/addProduct" :
-//                    message.setText();
-//                    break;
+            case "/addproduct":
+                addProductMessage(chatId);
+                break;
+            case "/getall":
+                getAllProducts(chatId);
+                break;
 //                case "/deleteProduct" :
 //                    message.setText();
 //                    break;
@@ -224,6 +369,36 @@ public class Bot extends TelegramLongPollingBot {
         }
     }
 
+    private void getAllProducts(long chatId) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        StringBuilder result = new StringBuilder();
+        AtomicInteger index = new AtomicInteger(1);
+        targetRepository.findAll().forEach(
+                target -> {
+                    result.append(
+                            index +
+                            " SKU: " +
+                            target.getProductId() +
+                            " PRICE: " +
+                            target.getRuleValue() +
+                            " STATE: " +
+                            target.getState() + "\n");
+                    index.incrementAndGet();
+                }
+        );
+        message.setText(result.toString());
+        executeMessage(message);
+    }
+
+    private void addProductMessage(Long chatId) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(ADD_PRODUCT);
+        cacheBotState.put(chatId, SET_ARTICLE);
+        executeMessage(message);
+    }
+
     private void executeMessage(SendMessage message) {
         try {
             execute(message);
@@ -232,7 +407,7 @@ public class Bot extends TelegramLongPollingBot {
         }
     }
 
-    private boolean validateMessage(long chatId, String messageText) {
+    private boolean validateChatIdMessage(String messageText) {
         try {
             Long.parseLong(messageText);
             return true;
@@ -243,9 +418,10 @@ public class Bot extends TelegramLongPollingBot {
 
 
     private void processingSetNameState(long chatId, String messageText) {
-        if (validateMessage(chatId, messageText)) {
+        if (validateChatIdMessage(messageText)) {
             UserInfoDTO userDTO = new UserInfoDTO();
             userDTO.setChatId(Long.parseLong(messageText));
+            userDTO.setUserId(chatId);
 
             UserInfoEntity userInfoEntity = userInfoMapper.toNewEntity(userDTO);
             userInfoRepository.save(userInfoEntity);
