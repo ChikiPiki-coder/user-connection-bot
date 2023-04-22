@@ -11,5 +11,4 @@ public class UserBotApplication {
 	public static void main(String[] args) {
 		SpringApplication.run(UserBotApplication.class, args);
 	}
-
 }

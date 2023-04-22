@@ -1,4 +1,4 @@
-package com.telegram.userBot;
+package com.telegram.userBot.bot;
 
 public enum BotState {
     START,
