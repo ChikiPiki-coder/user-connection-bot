@@ -8,7 +8,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import com.telegram.userBot.bot.event.EventsWithMessage;
+import com.telegram.userBot.bot.event.EventsMessage;
 import com.telegram.userBot.bot.process.Processing;
 import com.telegram.userBot.bot.product.ActionWithProduct;
 import com.telegram.userBot.constant.LoggerConst;
@@ -48,7 +48,7 @@ public class Bot extends TelegramLongPollingBot {
 
     private Map<Long, BotState> cacheBotState = new HashMap<>();
     private final static SendMessage message = new SendMessage();
-    private final EventsWithMessage eventsWithMessage = new EventsWithMessage();
+    private final EventsMessage eventsWithMessage = new EventsMessage();
     private final ActionWithProduct actionWithProduct = new ActionWithProduct();
     private final Processing processing = new Processing();
 

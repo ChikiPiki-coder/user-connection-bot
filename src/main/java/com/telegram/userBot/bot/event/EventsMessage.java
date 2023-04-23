@@ -13,7 +13,7 @@ import java.util.Map;
 
 import static com.telegram.userBot.constant.MessageConstant.*;
 
-public class EventsWithMessage {
+public class EventsMessage {
 
     private final static SendMessage message = new SendMessage();
     private static Map<Long, BotState> cacheBotState = new HashMap<>();

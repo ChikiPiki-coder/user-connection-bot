@@ -2,7 +2,7 @@ package com.telegram.userBot.bot.process;
 
 import com.telegram.userBot.bot.BotFunctionality;
 import com.telegram.userBot.bot.BotState;
-import com.telegram.userBot.bot.event.EventsWithMessage;
+import com.telegram.userBot.bot.event.EventsMessage;
 import com.telegram.userBot.bot.validate.Validator;
 import com.telegram.userBot.client.ScraperClient;
 import com.telegram.userBot.constant.LoggerConst;
@@ -26,7 +26,7 @@ import static com.telegram.userBot.constant.MessageConstant.*;
 public class Processing {
 
     private final Validator validator = new Validator();
-    private EventsWithMessage eventsWithMessage;
+    private EventsMessage eventsWithMessage;
     private BotFunctionality botFunctionality;
     private  Map<Long, BotState> cacheBotState;
     private SendMessage message;
@@ -130,6 +130,5 @@ public class Processing {
         cacheBotState.put(chatId, BotState.DEFAULT);
         botFunctionality.executeMessage(message);
     }
-
 
 }
