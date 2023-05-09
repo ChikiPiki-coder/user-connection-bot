@@ -13,4 +13,11 @@ spring:
     generate-ddl: true
 
 server:
-  port: 8084
+  port: 8086
+
+
+clients:
+  lamoda:
+    base-url: https://www.lamoda.ru/api/v1/product/get
+  scraper:
+    base-url: http://localhost:8083/targets

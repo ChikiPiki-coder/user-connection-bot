@@ -25,5 +25,8 @@ public class UserInfoEntity {
 
     @Column(name = "user_id")
     private Long userId;
+//
+//    @Column(name = "target_chat_id")
+//    private Long targetChatId;
 
 }

@@ -151,9 +151,14 @@ public class Bot extends TelegramLongPollingBot {
     private void processingSetRuleState(long chatId, String messageText) {
         if (validateRuleAndChatId(messageText)) {
             String[] words = messageText.split(",");
+//            userInfoRepository.save(userInfoRepository.findByUserIdAndChatId())
+            UserInfoEntity userEntity = userInfoRepository.findByUserIdAndChatId(chatId, Long.parseLong(words[1]));
+            if (userEntity == null) {
+                errorFormatRuleMessage(chatId);
+            }
             TargetEntity targetEntity = targetMapper.updateEntity(
                     targetRepository.findByUserId(
-                            userInfoRepository.findByUserIdAndChatId(chatId, Long.parseLong(words[1])).getUuid()),
+                            userEntity.getUuid()),
                     "ACTIVE",
                     Long.parseLong(words[0])
             );
