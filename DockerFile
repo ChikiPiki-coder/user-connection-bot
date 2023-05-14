@@ -1,0 +1,7 @@
+#
+# Package stage
+#
+FROM openjdk:17
+COPY ./target/TgConnectionBot-jar-with-dependencies.jar ./target/TgConnectionBot-jar-with-dependencies.jar
+EXPOSE 8086
+ENTRYPOINT ["java","-jar","./target/TgConnectionBot-jar-with-dependencies.jar"]

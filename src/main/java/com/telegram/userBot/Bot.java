@@ -260,7 +260,7 @@ public class Bot extends TelegramLongPollingBot {
         ResponseEntity<Void> productData;
         try {
             productData = lamodaClient.getProductData(messageText);
-        } catch (FeignException.FeignClientException e) {
+        } catch (FeignException e) {
             log.error(e.getMessage());
             return false;
         }

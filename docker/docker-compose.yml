@@ -1,0 +1,24 @@
+version: "3"
+
+services:
+
+  postgres:
+    image: postgres:14
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - 5432:5432
+    hostname: db
+
+
+  app-tg-bot:
+    image: tg-bot:1.0.0
+    ports:
+      - 8086:8086
+    environment:
+      JDBC_HOST: jdbc:postgresql://db:5432/postgres
+      BOT_NAME: FollowChangesBot
+      TELEGRAM_BOT_TOKEN: 6114311947:AAHoPCfjTFXvkuZe-P8QMRxX3FcHrnAzJ9w
+    depends_on:
+      - postgres
