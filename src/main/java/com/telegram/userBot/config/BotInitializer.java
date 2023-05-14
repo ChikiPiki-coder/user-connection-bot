@@ -1,5 +1,6 @@
 package com.telegram.userBot.config;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.ContextRefreshedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
@@ -11,10 +12,10 @@ import com.telegram.userBot.Bot;
 
 import lombok.RequiredArgsConstructor;
 
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class BotInitializer {
-
     private final Bot bot;
 
     @EventListener({ContextRefreshedEvent.class})
@@ -23,7 +24,7 @@ public class BotInitializer {
         try {
             telegramBotsApi.registerBot(bot);
         } catch (TelegramApiException telegramApiException){
-            System.out.println(telegramApiException.getMessage());
+            log.error(telegramApiException.getMessage());
         }
 
     }

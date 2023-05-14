@@ -1,4 +1,4 @@
-package com.telegram.userBot.constant;
+package com.telegram.userBot.util;
 
 public class MessageConstant {
     public static final String START_MESSAGE = "Добро пожаловать. Я Бот для отслеживания изменений цен товаров " +

@@ -10,6 +10,4 @@ public interface LamodaClient {
 
     @GetMapping
     ResponseEntity<Void> getProductData(@RequestParam String sku);
-
-
 }

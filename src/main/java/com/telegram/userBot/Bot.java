@@ -1,20 +1,22 @@
 package com.telegram.userBot;
 
-import static com.telegram.userBot.BotState.SET_ARTICLE;
-import static com.telegram.userBot.constant.MessageConstant.ADD_PRODUCT;
-import static com.telegram.userBot.constant.MessageConstant.DEFAULT_MESSAGE;
-import static com.telegram.userBot.constant.MessageConstant.END_ASK;
-import static com.telegram.userBot.constant.MessageConstant.END_RULE_INFO_BAD;
-import static com.telegram.userBot.constant.MessageConstant.END_RULE_INFO_GOOD;
-import static com.telegram.userBot.constant.MessageConstant.ENTER_CHAT_ID;
-import static com.telegram.userBot.constant.MessageConstant.ERROR_CHAT_ID_FORMAT;
-import static com.telegram.userBot.constant.MessageConstant.ERROR_NOT_USER_INFO;
-import static com.telegram.userBot.constant.MessageConstant.ERROR_PID_FORMAT;
-import static com.telegram.userBot.constant.MessageConstant.ERROR_RULE_FORMAT;
-import static com.telegram.userBot.constant.MessageConstant.HELP_MESSAGE;
-import static com.telegram.userBot.constant.MessageConstant.SET_NAME;
-import static com.telegram.userBot.constant.MessageConstant.SET_RULE_VALUE;
-import static com.telegram.userBot.constant.MessageConstant.START_MESSAGE;
+import static com.telegram.userBot.dto.enums.BotState.SET_ARTICLE;
+import static com.telegram.userBot.util.MessageConstant.ADD_PRODUCT;
+import static com.telegram.userBot.util.MessageConstant.DEFAULT_MESSAGE;
+import static com.telegram.userBot.util.MessageConstant.END_ASK;
+import static com.telegram.userBot.util.MessageConstant.END_RULE_INFO_BAD;
+import static com.telegram.userBot.util.MessageConstant.END_RULE_INFO_GOOD;
+import static com.telegram.userBot.util.MessageConstant.ENTER_CHAT_ID;
+import static com.telegram.userBot.util.MessageConstant.ERROR_CHAT_ID_FORMAT;
+import static com.telegram.userBot.util.MessageConstant.ERROR_NOT_USER_INFO;
+import static com.telegram.userBot.util.MessageConstant.ERROR_PID_FORMAT;
+import static com.telegram.userBot.util.MessageConstant.ERROR_RULE_FORMAT;
+import static com.telegram.userBot.util.MessageConstant.HELP_MESSAGE;
+import static com.telegram.userBot.util.MessageConstant.SET_NAME;
+import static com.telegram.userBot.util.MessageConstant.SET_RULE_VALUE;
+import static com.telegram.userBot.util.MessageConstant.START_MESSAGE;
+import static com.telegram.userBot.util.Validation.validateChatIdMessage;
+import static com.telegram.userBot.util.Validation.validateRuleAndChatId;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -22,13 +24,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.telegram.userBot.command.CommandDictionary;
+import com.telegram.userBot.dto.enums.BotState;
+import com.telegram.userBot.dto.enums.TargetState;
+import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.Update;
-import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
 import org.telegram.telegrambots.meta.api.objects.commands.scope.BotCommandScopeDefault;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
@@ -52,6 +58,7 @@ import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class Bot extends TelegramLongPollingBot {
     private final TelegramProperty config;
     private final UserInfoRepository userInfoRepository;
@@ -60,38 +67,19 @@ public class Bot extends TelegramLongPollingBot {
     private final TargetMapper targetMapper;
     private final LamodaClient lamodaClient;
     private final ScraperClient scraperClient;
-
+    private final CommandDictionary commandDictionary;
 
     private Map<Long, BotState> cacheBotState = new HashMap<>();
 
-    public Bot(TelegramProperty config,
-               UserInfoRepository userInfoRepository,
-               TargetRepository targetRepository,
-               UserInfoMapper userInfoMapper,
-               LamodaClient lamodaClient,
-               ScraperClient scraperClient,
-               TargetMapper targetMapper) {
-        this.userInfoRepository = userInfoRepository;
-        this.targetRepository = targetRepository;
-        this.userInfoMapper = userInfoMapper;
-        this.lamodaClient = lamodaClient;
-        this.scraperClient = scraperClient;
-        this.targetMapper = targetMapper;
-        this.config = config;
-
-        List<BotCommand> botCommandList = new ArrayList<>();
-        botCommandList.add(new BotCommand("/start", "Информация о боте"));
-        botCommandList.add(new BotCommand("/help", "Инструкция как пользоваться"));
-        botCommandList.add(new BotCommand("/addproduct", "Добавить новый товар для отслеживания"));
-        botCommandList.add(new BotCommand("/deleteproduct", "Удалить товар из списка отслеживаемых"));
-        botCommandList.add(new BotCommand("/getall", "Получить список всех зарегистрированных заявок"));
-        botCommandList.add(new BotCommand("/stoptrack", "Остановить отслеживаемый товар"));
-        botCommandList.add(new BotCommand("/startrack", "Остановить отслеживаемый товар"));
-        botCommandList.add(new BotCommand("/changeprice", "Поменять цену"));
-
+    @PostConstruct
+    public void init() {
         try {
-            this.execute(new SetMyCommands(botCommandList, new BotCommandScopeDefault(), null));
+            this.execute(new SetMyCommands(
+                commandDictionary.getCommandList(),
+                new BotCommandScopeDefault(),
+                null));
         } catch (TelegramApiException e) {
+            log.error(e.getMessage());
             throw new RuntimeException(e);
         }
     }
@@ -108,25 +96,11 @@ public class Bot extends TelegramLongPollingBot {
             }
             BotState state = cacheBotState.get(chatId);
             switch (state) {
-                case DEFAULT:
-                    processingDefaultState(chatId, messageText);
-                    break;
-                case SET_NAME:
-                    processingSetNameState(chatId, messageText);
-                    break;
-                case SET_RULE:
-                    processingSetRuleState(chatId, messageText);
-                    break;
-                case SET_ARTICLE:
-                    processingSetArticleState(chatId, messageText);
-                    break;
-                case SET_CHAT_ID:
-                case END_ASK_USER_INFO:
-                    processingEndAskUserInfoState(chatId, messageText);
-                    break;
-                default:
-                    processingDefaultState(chatId, messageText);
-                    break;
+                case SET_NAME -> processingSetNameState(chatId, messageText);
+                case SET_RULE -> processingSetRuleState(chatId, messageText);
+                case SET_ARTICLE -> processingSetArticleState(chatId, messageText);
+                case SET_CHAT_ID, END_ASK_USER_INFO -> processingEndAskUserInfoState(chatId, messageText);
+                default -> processingDefaultState(chatId, messageText);
             }
 
             SendMessage message = new SendMessage();
@@ -138,10 +112,8 @@ public class Bot extends TelegramLongPollingBot {
             long chatId = update.getCallbackQuery().getMessage().getChatId();
             SendMessage message = new SendMessage();
             message.setChatId(chatId);
-            switch (callbackData) {
-                case "CHAT_ID":
-                    enterChatIdMessage(chatId);
-                    break;
+            if (callbackData.equals("CHAT_ID")) {
+                enterChatIdMessage(chatId);
             }
 
         }
@@ -159,16 +131,16 @@ public class Bot extends TelegramLongPollingBot {
             TargetEntity targetEntity = targetMapper.updateEntity(
                     targetRepository.findByUserId(
                             userEntity.getUuid()),
-                    "ACTIVE",
-                    Long.parseLong(words[0])
-            );
+                            TargetState.ACTIVE.name(),
+                            Long.parseLong(words[0]));
 
             targetRepository.save(targetEntity);
 
-            TargetRequest targetRequest = new TargetRequest();
-            targetRequest.setTargetUUID(targetEntity.getUuid());
-            targetRequest.setProductId(targetEntity.getProductId());
-            targetRequest.setUserId(targetEntity.getUserId().toString());
+            TargetRequest targetRequest = TargetRequest.builder()
+                .targetUUID(targetEntity.getUuid())
+                .productId(targetEntity.getProductId())
+                .userId(targetEntity.getUserId().toString())
+                .build();
 
             SendMessage message = new SendMessage();
             message.setChatId(chatId);
@@ -195,25 +167,6 @@ public class Bot extends TelegramLongPollingBot {
         message.setChatId(chatId);
         message.setText(ERROR_RULE_FORMAT);
         executeMessage(message);
-    }
-
-    private boolean validateRuleAndChatId(String messageText) {
-        String[] words = messageText.split(",");
-        if (words.length != 2) {
-            return false;
-        }
-
-        try {
-            Long.parseLong(words[0]);
-        } catch (NumberFormatException e) {
-            return false;
-        }
-        try {
-            Long.parseLong(words[1]);
-        } catch (NumberFormatException e) {
-            return false;
-        }
-        return true;
     }
 
     private void processingSetArticleState(long chatId, String messageText) {
@@ -342,18 +295,11 @@ public class Bot extends TelegramLongPollingBot {
 
     private void processingDefaultState(long chatId, String messageText) {
         switch (messageText) {
-            case "/start":
-                startMessage(chatId);
-                break;
-            case "/help":
-                helpMessage(chatId);
-                break;
-            case "/addproduct":
-                addProductMessage(chatId);
-                break;
-            case "/getall":
-                getAllProducts(chatId);
-                break;
+            case "/start" -> startMessage(chatId);
+            case "/help" -> helpMessage(chatId);
+            case "/addproduct" -> addProductMessage(chatId);
+            case "/getall" -> getAllProducts(chatId);
+
 //                case "/deleteProduct" :
 //                    message.setText();
 //                    break;
@@ -368,9 +314,7 @@ public class Bot extends TelegramLongPollingBot {
 //                case "/setPrice":
 //                    message.setText();
 //                    break;
-            default:
-                defaultMessage(chatId);
-                break;
+            default -> defaultMessage(chatId);
         }
     }
 
@@ -381,14 +325,14 @@ public class Bot extends TelegramLongPollingBot {
         AtomicInteger index = new AtomicInteger(1);
         targetRepository.findAll().forEach(
                 target -> {
-                    result.append(
-                            index +
-                            " SKU: " +
-                            target.getProductId() +
-                            " PRICE: " +
-                            target.getRuleValue() +
-                            " STATE: " +
-                            target.getState() + "\n");
+                    result.append(index)
+                        .append(" SKU: ")
+                        .append(target.getProductId())
+                        .append(" PRICE: ")
+                        .append(target.getRuleValue())
+                        .append(" STATE: ")
+                        .append(target.getState())
+                        .append("\n");
                     index.incrementAndGet();
                 }
         );
@@ -411,16 +355,6 @@ public class Bot extends TelegramLongPollingBot {
             throw new RuntimeException();
         }
     }
-
-    private boolean validateChatIdMessage(String messageText) {
-        try {
-            Long.parseLong(messageText);
-            return true;
-        } catch (NumberFormatException e) {
-            return false;
-        }
-    }
-
 
     private void processingSetNameState(long chatId, String messageText) {
         if (validateChatIdMessage(messageText)) {

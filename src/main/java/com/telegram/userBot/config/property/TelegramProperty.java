@@ -16,5 +16,4 @@ public class TelegramProperty {
     private String token;
     @NotNull
     private String botName;
-//    @NotNull private String chatId;
 }
