@@ -1,22 +1,36 @@
 package com.telegram.userBot;
 
 import static com.telegram.userBot.dto.enums.BotState.SET_ARTICLE;
+import static com.telegram.userBot.dto.enums.BotState.SET_ARTICLE_FOR_CHANGE_PRICE;
+import static com.telegram.userBot.dto.enums.BotState.SET_ARTICLE_FOR_DELETING;
+import static com.telegram.userBot.dto.enums.BotState.SET_ARTICLE_FOR_STARTING;
+import static com.telegram.userBot.dto.enums.BotState.SET_ARTICLE_FOR_STOPPING;
 import static com.telegram.userBot.util.MessageConstant.ADD_PRODUCT;
+import static com.telegram.userBot.util.MessageConstant.CHANGE_PRICE;
 import static com.telegram.userBot.util.MessageConstant.DEFAULT_MESSAGE;
+import static com.telegram.userBot.util.MessageConstant.DELETE_PRODUCT;
 import static com.telegram.userBot.util.MessageConstant.END_ASK;
+import static com.telegram.userBot.util.MessageConstant.END_CHANGE_PRICE;
+import static com.telegram.userBot.util.MessageConstant.END_DELETING;
 import static com.telegram.userBot.util.MessageConstant.END_RULE_INFO_BAD;
 import static com.telegram.userBot.util.MessageConstant.END_RULE_INFO_GOOD;
+import static com.telegram.userBot.util.MessageConstant.END_STARTING_GOOD;
+import static com.telegram.userBot.util.MessageConstant.END_STOPPING_GOOD;
 import static com.telegram.userBot.util.MessageConstant.ENTER_CHAT_ID;
 import static com.telegram.userBot.util.MessageConstant.ERROR_CHAT_ID_FORMAT;
 import static com.telegram.userBot.util.MessageConstant.ERROR_NOT_USER_INFO;
 import static com.telegram.userBot.util.MessageConstant.ERROR_PID_FORMAT;
 import static com.telegram.userBot.util.MessageConstant.ERROR_RULE_FORMAT;
 import static com.telegram.userBot.util.MessageConstant.HELP_MESSAGE;
+import static com.telegram.userBot.util.MessageConstant.SET_ARTICLE_AND_PRICE;
 import static com.telegram.userBot.util.MessageConstant.SET_NAME;
 import static com.telegram.userBot.util.MessageConstant.SET_RULE_VALUE;
 import static com.telegram.userBot.util.MessageConstant.START_MESSAGE;
+import static com.telegram.userBot.util.MessageConstant.START_TRACK;
+import static com.telegram.userBot.util.MessageConstant.STOP_TRACK;
 import static com.telegram.userBot.util.Validation.validateChatIdMessage;
-import static com.telegram.userBot.util.Validation.validateRuleAndChatId;
+import static com.telegram.userBot.util.Validation.validatePidAndPrice;
+import static com.telegram.userBot.util.Validation.validateRule;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -24,11 +38,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import com.telegram.userBot.command.CommandDictionary;
-import com.telegram.userBot.dto.enums.BotState;
-import com.telegram.userBot.dto.enums.TargetState;
-import jakarta.annotation.PostConstruct;
-import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
@@ -42,10 +51,13 @@ import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
 import com.telegram.userBot.client.LamodaClient;
 import com.telegram.userBot.client.ScraperClient;
+import com.telegram.userBot.command.CommandDictionary;
 import com.telegram.userBot.config.property.TelegramProperty;
 import com.telegram.userBot.dto.TargetDTO;
 import com.telegram.userBot.dto.TargetRequest;
 import com.telegram.userBot.dto.UserInfoDTO;
+import com.telegram.userBot.dto.enums.BotState;
+import com.telegram.userBot.dto.enums.TargetState;
 import com.telegram.userBot.entity.TargetEntity;
 import com.telegram.userBot.entity.UserInfoEntity;
 import com.telegram.userBot.mapper.TargetMapper;
@@ -54,6 +66,8 @@ import com.telegram.userBot.repository.TargetRepository;
 import com.telegram.userBot.repository.UserInfoRepository;
 
 import feign.FeignException;
+import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -75,9 +89,9 @@ public class Bot extends TelegramLongPollingBot {
     public void init() {
         try {
             this.execute(new SetMyCommands(
-                commandDictionary.getCommandList(),
-                new BotCommandScopeDefault(),
-                null));
+                    commandDictionary.getCommandList(),
+                    new BotCommandScopeDefault(),
+                    null));
         } catch (TelegramApiException e) {
             log.error(e.getMessage());
             throw new RuntimeException(e);
@@ -100,6 +114,10 @@ public class Bot extends TelegramLongPollingBot {
                 case SET_RULE -> processingSetRuleState(chatId, messageText);
                 case SET_ARTICLE -> processingSetArticleState(chatId, messageText);
                 case SET_CHAT_ID, END_ASK_USER_INFO -> processingEndAskUserInfoState(chatId, messageText);
+                case SET_ARTICLE_FOR_DELETING -> processingSetArticleForDeletingState(chatId, messageText);
+                case SET_ARTICLE_FOR_STOPPING -> processingSetArticleForStoppingState(chatId, messageText);
+                case SET_ARTICLE_FOR_STARTING -> processingSetArticleForStartingState(chatId, messageText);
+                case SET_ARTICLE_FOR_CHANGE_PRICE -> processingSetArticleChangePriceState(chatId, messageText);
                 default -> processingDefaultState(chatId, messageText);
             }
 
@@ -121,26 +139,32 @@ public class Bot extends TelegramLongPollingBot {
     }
 
     private void processingSetRuleState(long chatId, String messageText) {
-        if (validateRuleAndChatId(messageText)) {
-            String[] words = messageText.split(",");
+        if (validateRule(messageText)) {
+//            String[] words = messageText.split(",");
 //            userInfoRepository.save(userInfoRepository.findByUserIdAndChatId())
-            UserInfoEntity userEntity = userInfoRepository.findByUserIdAndChatId(chatId, Long.parseLong(words[1]));
+            UserInfoEntity userEntity = userInfoRepository.findByUserId(chatId);
             if (userEntity == null) {
                 errorFormatRuleMessage(chatId);
             }
+            List<TargetEntity> entities = targetRepository.findByUserId(userEntity.getUuid());
+            TargetEntity updatedEntity = null;
+            for (TargetEntity entity : entities) {
+                if (entity.getState().equals("CREATING")) {
+                    updatedEntity = entity;
+                }
+            }
             TargetEntity targetEntity = targetMapper.updateEntity(
-                    targetRepository.findByUserId(
-                            userEntity.getUuid()),
-                            TargetState.ACTIVE.name(),
-                            Long.parseLong(words[0]));
+                    updatedEntity,
+                    TargetState.ACTIVE.name(),
+                    Long.parseLong(messageText));
 
             targetRepository.save(targetEntity);
 
             TargetRequest targetRequest = TargetRequest.builder()
-                .targetUUID(targetEntity.getUuid())
-                .productId(targetEntity.getProductId())
-                .userId(targetEntity.getUserId().toString())
-                .build();
+                    .targetUUID(targetEntity.getUuid())
+                    .productId(targetEntity.getProductId())
+                    .userId(targetEntity.getUserId().toString())
+                    .build();
 
             SendMessage message = new SendMessage();
             message.setChatId(chatId);
@@ -156,6 +180,117 @@ public class Bot extends TelegramLongPollingBot {
                 message.setText(END_RULE_INFO_BAD);
             }
 
+            executeMessage(message);
+        } else {
+            errorFormatRuleMessage(chatId);
+        }
+    }
+
+    private void processingSetArticleForDeletingState(long chatId, String messageText) {
+        UserInfoEntity userInfoEntity = userInfoRepository.findByUserId(chatId);
+        List<TargetEntity> entities = targetRepository.findByUserId(userInfoEntity.getUuid());
+        TargetEntity deletedTarget = null;
+        for (TargetEntity entity : entities) {
+            if (entity.getProductId().equals(messageText)) {
+                deletedTarget = entity;
+            }
+        }
+        if (deletedTarget == null) {
+            errorFormatPIDMessage(chatId);
+        }
+        targetRepository.delete(deletedTarget);
+
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(END_DELETING);
+        cacheBotState.put(chatId, BotState.DEFAULT);
+        executeMessage(message);
+    }
+
+    private void processingSetArticleForStoppingState(long chatId, String messageText) {
+        UserInfoEntity userInfoEntity = userInfoRepository.findByUserId(chatId);
+        List<TargetEntity> entities = targetRepository.findByUserId(userInfoEntity.getUuid());
+        TargetEntity stoppingTarget = null;
+        for (TargetEntity entity : entities) {
+            if (entity.getProductId().equals(messageText)) {
+                stoppingTarget = entity;
+            }
+        }
+        if (stoppingTarget == null) {
+            errorFormatPIDMessage(chatId);
+        }
+
+
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+
+        try {
+            if (scraperClient.stopTrack(stoppingTarget.getUuid()).getStatusCode().is2xxSuccessful()) {
+                message.setText(END_STOPPING_GOOD);
+                cacheBotState.put(chatId, BotState.DEFAULT);
+            } else {
+                message.setText(END_RULE_INFO_BAD);
+            }
+        } catch (Exception e) {
+            log.error(e.getMessage());
+            message.setText(END_RULE_INFO_BAD);
+        }
+        executeMessage(message);
+    }
+
+    private void processingSetArticleForStartingState(long chatId, String messageText) {
+        UserInfoEntity userInfoEntity = userInfoRepository.findByUserId(chatId);
+        List<TargetEntity> entities = targetRepository.findByUserId(userInfoEntity.getUuid());
+        TargetEntity stoppingTarget = null;
+        for (TargetEntity entity : entities) {
+            if (entity.getProductId().equals(messageText)) {
+                stoppingTarget = entity;
+            }
+        }
+        if (stoppingTarget == null) {
+            errorFormatPIDMessage(chatId);
+        }
+
+
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+
+        try {
+            if (scraperClient.startTrack(stoppingTarget.getUuid()).getStatusCode().is2xxSuccessful()) {
+                message.setText(END_STARTING_GOOD);
+                cacheBotState.put(chatId, BotState.DEFAULT);
+            } else {
+                message.setText(END_RULE_INFO_BAD);
+            }
+        } catch (Exception e) {
+            log.error(e.getMessage());
+            message.setText(END_RULE_INFO_BAD);
+        }
+        executeMessage(message);
+    }
+
+    private void processingSetArticleChangePriceState(long chatId, String messageText) {
+        if (validatePidAndPrice(messageText)) {
+            String[] words = messageText.split(",");
+            String pid = words[0];
+            Long price = Long.parseLong(words[1]);
+            UserInfoEntity userInfoEntity = userInfoRepository.findByUserId(chatId);
+            List<TargetEntity> entities = targetRepository.findByUserId(userInfoEntity.getUuid());
+            TargetEntity changedPrice = null;
+            for (TargetEntity entity : entities) {
+                if (entity.getProductId().equals(pid)) {
+                    changedPrice = entity;
+                }
+            }
+            if (changedPrice == null) {
+                errorFormatPIDMessage(chatId);
+            }
+            targetRepository.save(targetMapper.changePrice(changedPrice, price));
+
+            SendMessage message = new SendMessage();
+            message.setChatId(chatId);
+            message.setText(END_CHANGE_PRICE);
+            cacheBotState.put(chatId, BotState.DEFAULT);
             executeMessage(message);
         } else {
             errorFormatRuleMessage(chatId);
@@ -299,21 +434,10 @@ public class Bot extends TelegramLongPollingBot {
             case "/help" -> helpMessage(chatId);
             case "/addproduct" -> addProductMessage(chatId);
             case "/getall" -> getAllProducts(chatId);
-
-//                case "/deleteProduct" :
-//                    message.setText();
-//                    break;
-//                case "stopTrack" :
-//                    message.setText();
-//                    break;
-//                case "/starTrack" :
-//                    message.setText();
-//                case "/setName" :
-//                    message.setText();
-//                    break;
-//                case "/setPrice":
-//                    message.setText();
-//                    break;
+            case "/deleteproduct" -> deleteProductMessage(chatId);
+            case "/stoptrack" -> stopTrackMessage(chatId);
+            case "/starttrack" -> startTrackMessage(chatId);
+            case "/changeprice" -> changePriceMessage(chatId);
             default -> defaultMessage(chatId);
         }
     }
@@ -323,20 +447,54 @@ public class Bot extends TelegramLongPollingBot {
         message.setChatId(chatId);
         StringBuilder result = new StringBuilder();
         AtomicInteger index = new AtomicInteger(1);
-        targetRepository.findAll().forEach(
+        UserInfoEntity user = userInfoRepository.findByUserId(chatId);
+        targetRepository.findByUserId(user.getUuid()).forEach(
                 target -> {
                     result.append(index)
-                        .append(" SKU: ")
-                        .append(target.getProductId())
-                        .append(" PRICE: ")
-                        .append(target.getRuleValue())
-                        .append(" STATE: ")
-                        .append(target.getState())
-                        .append("\n");
+                            .append(" SKU: ")
+                            .append(target.getProductId())
+                            .append(" PRICE: ")
+                            .append(target.getRuleValue())
+                            .append(" STATE: ")
+                            .append(target.getState())
+                            .append("\n");
                     index.incrementAndGet();
                 }
         );
         message.setText(result.toString());
+        executeMessage(message);
+    }
+
+    private void deleteProductMessage(long chatId) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(DELETE_PRODUCT);
+        cacheBotState.put(chatId, SET_ARTICLE_FOR_DELETING);
+        executeMessage(message);
+    }
+
+
+    private void stopTrackMessage(long chatId) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(STOP_TRACK);
+        cacheBotState.put(chatId, SET_ARTICLE_FOR_STOPPING);
+        executeMessage(message);
+    }
+
+    private void startTrackMessage(long chatId) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(START_TRACK);
+        cacheBotState.put(chatId, SET_ARTICLE_FOR_STARTING);
+        executeMessage(message);
+    }
+
+    private void changePriceMessage(long chatId) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(SET_ARTICLE_AND_PRICE);
+        cacheBotState.put(chatId, SET_ARTICLE_FOR_CHANGE_PRICE);
         executeMessage(message);
     }
 

@@ -20,7 +20,7 @@ public class CommandDictionary {
         commandList.add(new BotCommand("/deleteproduct", "Удалить товар из списка отслеживаемых"));
         commandList.add(new BotCommand("/getall", "Получить список всех зарегистрированных заявок"));
         commandList.add(new BotCommand("/stoptrack", "Остановить отслеживаемый товар"));
-        commandList.add(new BotCommand("/startrack", "Остановить отслеживаемый товар"));
+        commandList.add(new BotCommand("/starttrack", "Остановить отслеживаемый товар"));
         commandList.add(new BotCommand("/changeprice", "Поменять цену"));
     }
 

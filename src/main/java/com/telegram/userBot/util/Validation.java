@@ -16,15 +16,18 @@ public class Validation {
         }
     }
 
-    public static boolean validateRuleAndChatId(String messageText) {
-        String[] words = messageText.split(",");
-        if (words.length != 2) {
+    public static boolean validateRule(String messageText) {
+        try {
+            Long.parseLong(messageText);
+            return true;
+        } catch (NumberFormatException e) {
             return false;
         }
+    }
 
-        try {
-            Long.parseLong(words[0]);
-        } catch (NumberFormatException e) {
+    public static boolean validatePidAndPrice(String messageText) {
+        String[] words = messageText.split(",");
+        if (words.length != 2) {
             return false;
         }
         try {

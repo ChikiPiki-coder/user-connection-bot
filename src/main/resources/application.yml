@@ -20,4 +20,4 @@ clients:
   lamoda:
     base-url: https://www.lamoda.ru/api/v1/product/get
   scraper:
-    base-url: http://localhost:8083/targets
+    base-url: ${SCRAPER_HOST:http://localhost:8083/targets}

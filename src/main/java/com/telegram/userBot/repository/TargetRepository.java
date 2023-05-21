@@ -16,7 +16,7 @@ public interface TargetRepository extends JpaRepository<TargetEntity, UUID> {
 
     Optional<TargetEntity> findByUuid(UUID uuid);
 
-    TargetEntity findByUserId(UUID userId);
+    List<TargetEntity> findByUserId(UUID userId);
 
     List<TargetEntity> findAllByState(String state);
 

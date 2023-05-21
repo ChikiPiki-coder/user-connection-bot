@@ -24,4 +24,8 @@ public interface TargetMapper {
     @Mapping(target = "state", source = "state")
     @Mapping(target = "ruleValue", source = "ruleValue")
     TargetEntity updateEntity(@MappingTarget TargetEntity targetEntity, String state, Long ruleValue);
+
+    @Mapping(target = "updatedAt", expression = "java(new Timestamp(System.currentTimeMillis()))")
+    @Mapping(target = "ruleValue", source = "ruleValue")
+    TargetEntity changePrice(@MappingTarget TargetEntity targetEntity, Long ruleValue);
 }
