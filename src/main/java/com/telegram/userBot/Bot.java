@@ -1,6 +1,11 @@
 package com.telegram.userBot;
 
+import static com.telegram.userBot.dto.enums.BotState.DEFAULT;
 import static com.telegram.userBot.dto.enums.BotState.SET_ARTICLE;
+import static com.telegram.userBot.dto.enums.BotState.SET_RULE;
+import static com.telegram.userBot.dto.enums.TargetState.ACTIVE;
+import static com.telegram.userBot.util.CommonConstant.CHAT_ID_FIELD;
+import static com.telegram.userBot.util.CommonConstant.COMMA_SPLITERATOR;
 import static com.telegram.userBot.util.MessageConstant.ADD_PRODUCT;
 import static com.telegram.userBot.util.MessageConstant.DEFAULT_MESSAGE;
 import static com.telegram.userBot.util.MessageConstant.END_ASK;
@@ -15,20 +20,20 @@ import static com.telegram.userBot.util.MessageConstant.HELP_MESSAGE;
 import static com.telegram.userBot.util.MessageConstant.SET_NAME;
 import static com.telegram.userBot.util.MessageConstant.SET_RULE_VALUE;
 import static com.telegram.userBot.util.MessageConstant.START_MESSAGE;
-import static com.telegram.userBot.util.Validation.validateChatIdMessage;
-import static com.telegram.userBot.util.Validation.validateRuleAndChatId;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.telegram.userBot.command.CommandDictionary;
 import com.telegram.userBot.dto.enums.BotState;
-import com.telegram.userBot.dto.enums.TargetState;
+import com.telegram.userBot.mapper.RequestMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
@@ -44,7 +49,6 @@ import com.telegram.userBot.client.LamodaClient;
 import com.telegram.userBot.client.ScraperClient;
 import com.telegram.userBot.config.property.TelegramProperty;
 import com.telegram.userBot.dto.TargetDTO;
-import com.telegram.userBot.dto.TargetRequest;
 import com.telegram.userBot.dto.UserInfoDTO;
 import com.telegram.userBot.entity.TargetEntity;
 import com.telegram.userBot.entity.UserInfoEntity;
@@ -60,6 +64,7 @@ import lombok.extern.slf4j.Slf4j;
 @Component
 @RequiredArgsConstructor
 public class Bot extends TelegramLongPollingBot {
+    private final RequestMapper requestMapper;
     private final TelegramProperty config;
     private final UserInfoRepository userInfoRepository;
     private final TargetRepository targetRepository;
@@ -84,17 +89,23 @@ public class Bot extends TelegramLongPollingBot {
         }
     }
 
+    private void executeMessage(SendMessage message) {
+        try {
+            execute(message);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException();
+        }
+    }
+
     @Override
     public void onUpdateReceived(Update update) {
-        // We check if the update has a message and the message has text
         if (update.hasMessage() && update.getMessage().hasText()) {
             String messageText = update.getMessage().getText();
             long chatId = update.getMessage().getChatId();
 
-            if (!cacheBotState.containsKey(chatId)) {
-                cacheBotState.put(chatId, BotState.DEFAULT);
-            }
+            cacheBotState.putIfAbsent(chatId, DEFAULT);
             BotState state = cacheBotState.get(chatId);
+
             switch (state) {
                 case SET_NAME -> processingSetNameState(chatId, messageText);
                 case SET_RULE -> processingSetRuleState(chatId, messageText);
@@ -102,111 +113,180 @@ public class Bot extends TelegramLongPollingBot {
                 case SET_CHAT_ID, END_ASK_USER_INFO -> processingEndAskUserInfoState(chatId, messageText);
                 default -> processingDefaultState(chatId, messageText);
             }
-
-            SendMessage message = new SendMessage();
-            message.setChatId(chatId);
-
-
         } else if (update.hasCallbackQuery()) {
             String callbackData = update.getCallbackQuery().getData();
             long chatId = update.getCallbackQuery().getMessage().getChatId();
-            SendMessage message = new SendMessage();
-            message.setChatId(chatId);
-            if (callbackData.equals("CHAT_ID")) {
+
+            if (CHAT_ID_FIELD.equals(callbackData)) {
                 enterChatIdMessage(chatId);
             }
-
         }
 
     }
 
-    private void processingSetRuleState(long chatId, String messageText) {
-        if (validateRuleAndChatId(messageText)) {
-            String[] words = messageText.split(",");
-//            userInfoRepository.save(userInfoRepository.findByUserIdAndChatId())
-            UserInfoEntity userEntity = userInfoRepository.findByUserIdAndChatId(chatId, Long.parseLong(words[1]));
-            if (userEntity == null) {
-                errorFormatRuleMessage(chatId);
-            }
-            TargetEntity targetEntity = targetMapper.updateEntity(
-                    targetRepository.findByUserId(
-                            userEntity.getUuid()),
-                            TargetState.ACTIVE.name(),
-                            Long.parseLong(words[0]));
+    private void processingSetRuleState(long chatId, String text) {
+        List<String> input = List.of(text.split(COMMA_SPLITERATOR));
 
-            targetRepository.save(targetEntity);
+        if (StringUtils.isNumeric(input.get(0)) && StringUtils.isNumeric(input.get(1))) {
+            Long price = Long.valueOf(input.get(0));
+            Long inputChatId = Long.valueOf(input.get(1));
 
-            TargetRequest targetRequest = TargetRequest.builder()
-                .targetUUID(targetEntity.getUuid())
-                .productId(targetEntity.getProductId())
-                .userId(targetEntity.getUserId().toString())
-                .build();
+            Optional<UserInfoEntity> possibleUser = userInfoRepository.
+                findByUserIdAndChatId(chatId, inputChatId);
 
-            SendMessage message = new SendMessage();
-            message.setChatId(chatId);
-            try {
-                if (scraperClient.addProduct(targetRequest).getStatusCode().is2xxSuccessful()) {
-                    message.setText(END_RULE_INFO_GOOD);
-                    cacheBotState.put(chatId, BotState.DEFAULT);
-                } else {
-                    message.setText(END_RULE_INFO_BAD);
-                }
-            } catch (Exception e) {
-                log.error(e.getMessage());
-                message.setText(END_RULE_INFO_BAD);
-            }
+            possibleUser.ifPresentOrElse((entity) -> {
+                    TargetEntity targetEntity = targetRepository.findByUserId(entity.getUuid());
+                    targetMapper.updateEntity(targetEntity, ACTIVE.toString(), price);
 
-            executeMessage(message);
-        } else {
-            errorFormatRuleMessage(chatId);
+                    targetRepository.save(targetMapper.updateEntity(
+                        targetRepository.findByUserId(entity.getUuid()), ACTIVE.name(), price));
+
+                    SendMessage.SendMessageBuilder message = SendMessage.builder().chatId(chatId);
+                    try {
+                        if (scraperClient.addProduct(requestMapper.toRequest(targetEntity))
+                            .getStatusCode().is2xxSuccessful()) {
+                            message.text(END_RULE_INFO_GOOD);
+
+                            cacheBotState.put(chatId, BotState.DEFAULT);
+                            executeMessage(message.build());
+
+                            return;
+                        }
+
+                        message.text(END_RULE_INFO_BAD);
+                        executeMessage(message.build());
+                    } catch (Exception e) {
+                        log.error(e.getMessage());
+                        message.text(END_RULE_INFO_BAD);
+
+                        executeMessage(message.build());
+                    }
+                },
+                () -> errorFormatRuleMessage(chatId)
+            );
+
+            return;
+        }
+
+        errorFormatRuleMessage(chatId);
+    }
+
+    private void processingSetArticleState(long chatId, String input) {
+        if (validatePid(input)) {
+            TargetDTO.TargetDTOBuilder targetDTO = TargetDTO.builder()
+                .productId(input);
+
+            Optional<UserInfoEntity> possibleUserEntity = userInfoRepository.findByUserId(chatId);
+
+            possibleUserEntity.ifPresentOrElse((entity) -> {
+                    targetDTO.userId(entity.getUuid());
+                    targetRepository.save(targetMapper.toNewEntity(targetDTO.build()));
+
+                    cacheBotState.put(chatId, SET_RULE);
+
+                    executeMessage(SendMessage.builder()
+                        .chatId(chatId)
+                        .text(SET_RULE_VALUE)
+                        .build());
+                },
+                () -> errorNotUserInfo(chatId)
+            );
+
+            return;
+        }
+
+        errorFormatPIDMessage(chatId);
+    }
+
+    public void helpMessage(long chatId) {
+        InlineKeyboardMarkup markupInLine = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> rowsInLine = new ArrayList<>();
+        List<InlineKeyboardButton> rowInLine = new ArrayList<>();
+        var setChatId = new InlineKeyboardButton();
+
+        setChatId.setText("Ввести chat id");
+        setChatId.setCallbackData(CHAT_ID_FIELD);
+
+        rowInLine.add(setChatId);
+        rowsInLine.add(rowInLine);
+
+        markupInLine.setKeyboard(rowsInLine);
+
+        executeMessage(SendMessage.builder()
+            .chatId(chatId).text(HELP_MESSAGE)
+            .replyMarkup(markupInLine)
+            .build());
+    }
+
+    private void processingEndAskUserInfoState(long chatId, String messageText) {
+        Optional<UserInfoEntity> possibleUserEntity = userInfoRepository.findByUserId(chatId);
+
+        possibleUserEntity.ifPresent((entity) -> {
+            userInfoRepository.save(userInfoMapper.updateEntity(entity, messageText));
+
+            cacheBotState.put(chatId, DEFAULT);
+            executeMessage(SendMessage.builder().chatId(chatId).text(END_ASK).build());
+        });
+    }
+
+    private void processingDefaultState(long chatId, String messageText) {
+        switch (messageText) {
+            case "/start" -> startMessage(chatId);
+            case "/help" -> helpMessage(chatId);
+            case "/addproduct" -> addProductMessage(chatId);
+            case "/getall" -> getAllProducts(chatId);
+
+            default -> defaultMessage(chatId);
         }
     }
 
-    private void errorFormatRuleMessage(long chatId) {
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        message.setText(ERROR_RULE_FORMAT);
-        executeMessage(message);
-    }
-
-    private void processingSetArticleState(long chatId, String messageText) {
-        if (validatePid(messageText)) {
-            TargetDTO targetDTO = new TargetDTO();
-            targetDTO.setProductId(messageText);
-            UserInfoEntity userEntity = userInfoRepository.findByUserId(chatId);
-            if (userEntity == null) {
-                errorNotUserInfo(chatId);
-                return;
+    private void getAllProducts(long chatId) {
+        StringBuilder result = new StringBuilder();
+        AtomicInteger index = new AtomicInteger(1);
+        targetRepository.findAll().forEach(
+            target -> {
+                result.append(index)
+                    .append(" SKU: ")
+                    .append(target.getProductId())
+                    .append(" PRICE: ")
+                    .append(target.getRuleValue())
+                    .append(" STATE: ")
+                    .append(target.getState())
+                    .append("\n");
+                index.incrementAndGet();
             }
-            targetDTO.setUserId(userEntity.getUuid());
-            TargetEntity ruleInfoEntity = targetMapper.toNewEntity(targetDTO);
-            targetRepository.save(ruleInfoEntity);
+        );
 
-            SendMessage message = new SendMessage();
-            message.setChatId(chatId);
-            message.setText(SET_RULE_VALUE);
+        executeMessage(SendMessage.builder()
+            .chatId(chatId).text(result.toString())
+            .build());
+    }
 
-            cacheBotState.put(chatId, BotState.SET_RULE);
+    private void addProductMessage(Long chatId) {
+        cacheBotState.put(chatId, SET_ARTICLE);
+        executeMessage(SendMessage.builder()
+            .text(ADD_PRODUCT).chatId(chatId)
+            .build());
+    }
 
-            executeMessage(message);
-        } else {
-            errorFormatPIDMessage(chatId);
+    private void processingSetNameState(long chatId, String input) {
+        if (StringUtils.isNumeric(input)) {
+            UserInfoEntity userInfoEntity = userInfoMapper.toNewEntity(UserInfoDTO.builder()
+                .userId(chatId)
+                .chatId(Long.parseLong(input))
+                .build());
+            userInfoRepository.save(userInfoEntity);
+
+            cacheBotState.put(chatId, BotState.END_ASK_USER_INFO);
+
+            executeMessage(SendMessage.builder()
+                .chatId(chatId).text(SET_NAME)
+                .build());
+
+            return;
         }
-    }
 
-    private void errorNotUserInfo(long chatId) {
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        message.setText(ERROR_NOT_USER_INFO);
-        cacheBotState.put(chatId, BotState.SET_NAME);
-        executeMessage(message);
-    }
-
-    private void errorFormatPIDMessage(long chatId) {
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        message.setText(ERROR_PID_FORMAT);
-        executeMessage(message);
+        errorFormatChatIdMessage(chatId);
     }
 
     private boolean validatePid(String messageText) {
@@ -220,163 +300,6 @@ public class Bot extends TelegramLongPollingBot {
         return productData.getStatusCode().value() == 200;
     }
 
-
-    private void errorFormatChatIdMessage(long chatId) {
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        message.setText(ERROR_CHAT_ID_FORMAT);
-        executeMessage(message);
-    }
-
-
-    private void startMessage(long chatId) {
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        message.setText(START_MESSAGE);
-        executeMessage(message);
-    }
-
-    private void defaultMessage(long chatId) {
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        message.setText(DEFAULT_MESSAGE);
-        executeMessage(message);
-    }
-
-    private void enterChatIdMessage(long chatId) {
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        message.setText(ENTER_CHAT_ID);
-        executeMessage(message);
-        cacheBotState.put(chatId, BotState.SET_NAME);
-    }
-
-    private void enterNameMessage(long chatId) {
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        message.setText(ENTER_CHAT_ID);
-        executeMessage(message);
-        cacheBotState.put(chatId, BotState.SET_NAME);
-    }
-
-    public void helpMessage(long chatId) {
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        message.setText(HELP_MESSAGE);
-//        cacheBotState.put(chatId, BotState.HELP);
-        InlineKeyboardMarkup markupInLine = new InlineKeyboardMarkup();
-        List<List<InlineKeyboardButton>> rowsInLine = new ArrayList<>();
-        List<InlineKeyboardButton> rowInLine = new ArrayList<>();
-        var setChatId = new InlineKeyboardButton();
-
-        setChatId.setText("Ввести chat id");
-        setChatId.setCallbackData("CHAT_ID");
-
-
-        rowInLine.add(setChatId);
-        rowsInLine.add(rowInLine);
-
-        markupInLine.setKeyboard(rowsInLine);
-        message.setReplyMarkup(markupInLine);
-
-        executeMessage(message);
-    }
-
-    private void processingEndAskUserInfoState(long chatId, String messageText) {
-        UserInfoEntity userInfoEntity = userInfoMapper.updateEntity(userInfoRepository.findByUserId(chatId), messageText);
-        userInfoRepository.save(userInfoEntity);
-
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        message.setText(END_ASK);
-        cacheBotState.put(chatId, BotState.DEFAULT);
-        executeMessage(message);
-    }
-
-    private void processingDefaultState(long chatId, String messageText) {
-        switch (messageText) {
-            case "/start" -> startMessage(chatId);
-            case "/help" -> helpMessage(chatId);
-            case "/addproduct" -> addProductMessage(chatId);
-            case "/getall" -> getAllProducts(chatId);
-
-//                case "/deleteProduct" :
-//                    message.setText();
-//                    break;
-//                case "stopTrack" :
-//                    message.setText();
-//                    break;
-//                case "/starTrack" :
-//                    message.setText();
-//                case "/setName" :
-//                    message.setText();
-//                    break;
-//                case "/setPrice":
-//                    message.setText();
-//                    break;
-            default -> defaultMessage(chatId);
-        }
-    }
-
-    private void getAllProducts(long chatId) {
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        StringBuilder result = new StringBuilder();
-        AtomicInteger index = new AtomicInteger(1);
-        targetRepository.findAll().forEach(
-                target -> {
-                    result.append(index)
-                        .append(" SKU: ")
-                        .append(target.getProductId())
-                        .append(" PRICE: ")
-                        .append(target.getRuleValue())
-                        .append(" STATE: ")
-                        .append(target.getState())
-                        .append("\n");
-                    index.incrementAndGet();
-                }
-        );
-        message.setText(result.toString());
-        executeMessage(message);
-    }
-
-    private void addProductMessage(Long chatId) {
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        message.setText(ADD_PRODUCT);
-        cacheBotState.put(chatId, SET_ARTICLE);
-        executeMessage(message);
-    }
-
-    private void executeMessage(SendMessage message) {
-        try {
-            execute(message);
-        } catch (TelegramApiException e) {
-            throw new RuntimeException();
-        }
-    }
-
-    private void processingSetNameState(long chatId, String messageText) {
-        if (validateChatIdMessage(messageText)) {
-            UserInfoDTO userDTO = new UserInfoDTO();
-            userDTO.setChatId(Long.parseLong(messageText));
-            userDTO.setUserId(chatId);
-
-            UserInfoEntity userInfoEntity = userInfoMapper.toNewEntity(userDTO);
-            userInfoRepository.save(userInfoEntity);
-
-            SendMessage message = new SendMessage();
-            message.setChatId(chatId);
-            message.setText(SET_NAME);
-
-            cacheBotState.put(chatId, BotState.END_ASK_USER_INFO);
-
-            executeMessage(message);
-        } else {
-            errorFormatChatIdMessage(chatId);
-        }
-    }
-
     @Override
     public String getBotUsername() {
         return config.getBotName();
@@ -385,6 +308,63 @@ public class Bot extends TelegramLongPollingBot {
     @Override
     public String getBotToken() {
         return config.getToken();
+    }
+
+    // Utility executor message methods
+
+    private void errorFormatRuleMessage(long chatId) {
+        executeMessage(SendMessage.builder()
+            .chatId(chatId)
+            .text(ERROR_RULE_FORMAT)
+            .build());
+    }
+
+
+    private void errorFormatChatIdMessage(long chatId) {
+        executeMessage(SendMessage.builder()
+            .chatId(chatId)
+            .text(ERROR_CHAT_ID_FORMAT)
+            .build());
+    }
+
+
+    private void startMessage(long chatId) {
+        executeMessage(SendMessage.builder()
+            .chatId(chatId)
+            .text(START_MESSAGE)
+            .build());
+    }
+
+    private void defaultMessage(long chatId) {
+        executeMessage(SendMessage.builder()
+            .chatId(chatId)
+            .text(DEFAULT_MESSAGE)
+            .build());
+    }
+
+    private void enterChatIdMessage(long chatId) {
+        executeMessage(SendMessage.builder()
+            .chatId(chatId)
+            .text(ENTER_CHAT_ID)
+            .build());
+
+        cacheBotState.put(chatId, BotState.SET_NAME);
+    }
+
+    private void errorNotUserInfo(long chatId) {
+        executeMessage(SendMessage.builder()
+            .chatId(chatId)
+            .text(ERROR_NOT_USER_INFO)
+            .build());
+
+        cacheBotState.put(chatId, BotState.SET_NAME);
+    }
+
+    private void errorFormatPIDMessage(long chatId) {
+        executeMessage(SendMessage.builder()
+            .chatId(chatId)
+            .text(ERROR_PID_FORMAT)
+            .build());
     }
 }
 
